@@ -1,0 +1,261 @@
+# variable filename string 240415a
+variable datafile string ${filename}_sls.dat
+
+log ${filename}.log
+
+boundary f p p
+units lj
+atom_style atomic
+
+#variable T equal 0.3305/40*10
+variable T equal 2.8
+variable dT equal $T/3
+#variable dT equal 
+variable TL equal $T+${dT}/2
+variable TR equal $T-${dT}/2
+
+variable Tdamp equal 1.0 # In LJ units
+variable Pdamp equal 10.0
+
+variable e_ss equal 10.0
+variable e_ll equal 1.0
+variable e_ls equal 0.2
+
+atom_modify sort 0 0.0
+pair_style lj/cut 2.5
+read_data ${datafile}
+pair_coeff 1 1 ${e_ss} 1.0
+pair_coeff 3 3 ${e_ss} 1.0
+# pair_coeff 1 2 0.2 1.0
+pair_coeff 1 2 ${e_ls} 1.0
+pair_coeff 2 2 ${e_ll} 1.0
+# pair_coeff 2 3 0.2 1.0
+pair_coeff 2 3 ${e_ls} 1.0
+pair_coeff 1 3 0 1.0
+
+neighbor 0.3 bin
+neigh_modify delay 0 every 1
+
+timestep 0.002 # Used in Merabia
+
+# How large areas are fixed
+variable Lfixed1 equal 3.0
+variable Lfixed equal xlo+${Lfixed1}
+# How large areas are thermalized
+variable Lbath1 equal 12.0
+variable Lbath equal xlo+${Lbath1}
+variable Lhelp equal xhi-${Lfixed1}
+variable Lhelp2 equal xhi-${Lbath1}
+
+# How many steps for initial linear temperature profile
+variable steps_equil equal 200000
+# How many steps for reaching the steady state
+variable steps_steady equal 1000000
+# How many steps for the collection run
+variable steps_simu equal 5000000
+
+region 1 block INF ${Lfixed} INF INF INF INF 
+region 2 block ${Lhelp} INF INF INF INF INF 
+region 3 block INF ${Lbath} INF INF INF INF 
+region 4 block ${Lhelp2} INF INF INF INF INF
+
+group fixedL region 1
+group fixedR region 2
+group fixed union fixedL fixedR
+
+group hot region 3
+group hot subtract hot fixedL
+group cold region 4
+group cold subtract cold fixedR
+
+group solid1 type 1
+group liquid type 2
+group solid2 type 3
+variable width_interface equal 1.5
+
+variable solid1_max equal bound(solid1,xmax)
+variable interfaceL_min equal ${solid1_max}-${width_interface}
+variable interfaceL_max equal ${solid1_max}+0.1
+region surfaceL block ${interfaceL_min} ${interfaceL_max} INF INF INF INF
+group interfaceL region surfaceL
+group interfaceL intersect interfaceL solid1
+
+variable solid2_min equal bound(solid2,xmin)
+variable interfaceR_min equal ${solid2_min}-0.1
+variable interfaceR_max equal ${solid2_min}+${width_interface}
+region surfaceR block ${interfaceR_min} ${interfaceR_max} INF INF INF INF
+group interfaceR region surfaceR
+group interfaceR intersect interfaceR solid2
+# quit
+group interface union interfaceL interfaceR
+# Includes ALL the liquid atoms in the dump, unncecessary if purge used in the read_dump 
+group interface_and_liquid union interface liquid
+
+# variable liquid_L_max equal ${solid1_max}+5.0 # Account for expansion of the solid
+# region surface_liquid_L block ${solid1_max} ${liquid_L_max} INF INF INF INF
+# group liquid_L dynamic liquid region surface_liquid_L every 1
+
+# variable liquid_R_min equal ${solid2_min}-5.0 # Account for expansion of the solid
+# region surface_liquid_R block ${liquid_R_min} ${solid2_min} INF INF INF INF
+# group liquid_R dynamic liquid region surface_liquid_R every 1
+
+# group interface_and_liquid union interface liquid_L liquid_R
+# quit
+
+group mobile subtract all fixed
+
+thermo_style custom step temp etotal cpu cpuremain
+
+velocity mobile create ${T} 23423424 dist gaussian mom yes
+
+# Initial integration to remove overlapping atoms
+fix 1 mobile nve/limit 0.01
+run 1000
+unfix 1
+
+# FIXES
+thermo 100
+fix NVE mobile nve
+fix NVT mobile langevin ${T} ${T} ${Tdamp} 9348734 # zero yes
+
+dump start_coords all xyz 100 ${filename}_traj_start.xyz
+# dump_modify start_coords element 
+
+# Temperature profile
+compute KE all ke/atom
+variable convert equal 1.0 # 40/0.3305
+variable Ti atom c_KE*${convert}*2.0/3.0
+variable Ti2 atom v_Ti*v_Ti
+compute chunk all chunk/atom bin/1d x 0.0 2.0
+
+fix Ts all ave/chunk 10 10 100 chunk v_Ti v_Ti2 file ${filename}.Ti_equil.dat ave running overwrite
+
+run ${steps_equil}
+
+unfix NVT
+unfix Ts
+undump start_coords
+uncompute chunk
+
+write_restart ${filename}.equil.restart
+
+thermo 100
+# Hot bath
+fix HOT hot langevin ${TL} ${TL} ${Tdamp} 12223 tally yes # gjf yes
+# Cold bath
+fix COLD cold langevin ${TR} ${TR} ${Tdamp} 2276822 tally yes # gjf yes
+
+dump simu_coords all xyz 1000 ${filename}_simu.xyz
+# dump_modify simu_coords element C C
+
+compute chunk all chunk/atom bin/1d x 0.0 2.0
+fix Ts all ave/chunk 100 10 1000 chunk v_Ti v_Ti2 file ${filename}.Ti_start.dat ave running title1 "Atomic temperatures"
+thermo 100
+fix aveinput_start hot ave/time 1 1 100 f_HOT ave one file ${filename}.aveinput_hot_start.dat
+fix aveinput_cold_start cold ave/time 1 1 100 f_COLD ave one file ${filename}.aveinput_cold_start.dat
+# quit
+# Wait for steady state
+run ${steps_steady}
+# quit
+unfix Ts
+uncompute chunk
+unfix aveinput_start
+unfix aveinput_cold_start
+
+# quit
+
+write_restart ${filename}.steadystate.restart
+# quit
+fix aveinput hot ave/time 1 1 100 f_HOT ave one file ${filename}.aveinput_hot.dat
+fix aveinput_cold cold ave/time 1 1 100 f_COLD ave one file ${filename}.aveinput_cold.dat
+
+compute chunk2 all chunk/atom bin/1d x 0.0 1.0
+
+fix density liquid ave/chunk 100 10 1000 chunk2 density/number ave running file ${filename}.density.dat overwrite title1 "Number density"
+
+compute chunk all chunk/atom bin/1d x 0.0 2.0
+
+fix Ts all ave/chunk 100 10 1000 chunk v_Ti v_Ti2 file ${filename}.Ti.dat ave running overwrite title1 "Atomic temperatures"
+
+fix Ts2 all ave/chunk 100 10 1000 chunk v_Ti v_Ti2 file ${filename}.Ti_sample.dat ave running norm sample overwrite title1 "Atomic temperatures"
+
+thermo 100
+variable dt_dump equal 10
+dump dumppaus interface_and_liquid custom ${dt_dump} ${filename}.dump id x y z vx vy vz
+
+restart 10000000 ${filename}.*.restart
+
+run ${steps_simu}
+
+undump dumppaus
+undump simu_coords
+unfix Ts
+unfix Ts2
+unfix density
+uncompute chunk
+uncompute chunk2
+unfix aveinput
+unfix aveinput_cold
+unfix HOT
+unfix COLD
+unfix NVE
+
+write_restart ${filename}.end.restart
+
+# quit
+
+# Rerun, can be made in another file by restarting
+variable xmid equal (xhi+xlo)/2
+variable xmidhi equal ${xmid}+4
+variable xmidlo equal ${xmid}-4
+
+region rleft block EDGE ${xmid} EDGE EDGE EDGE EDGE
+region rright block ${xmid} EDGE EDGE EDGE EDGE EDGE
+
+region rleft_small block ${xmidlo} ${xmid} EDGE EDGE EDGE EDGE
+region rright_small block ${xmid} ${xmidhi} EDGE EDGE EDGE EDGE
+
+group left dynamic liquid region rleft
+group right dynamic liquid region rright
+
+group left_small dynamic liquid region rleft_small
+group right_small dynamic liquid region rright_small
+
+neigh_modify exclude type 1 1
+# neigh_modify exclude type 2 2
+neigh_modify exclude type 3 3
+neigh_modify exclude group left left exclude group right right every 1 delay 0 check no
+# neigh_modify exclude group left right
+# neigh_modify exclude type 1 2
+# neigh_modify exclude type 2 3
+
+# The forces may include contributions from the solid for a thin liquid layer, 
+# be careful!
+
+
+# neigh_modify exclude type 2 3
+
+# dump dump_L left_small custom 10 ${filename}.left.dat id x fx fy fz
+# dump dump_R right_small custom 10 ${filename}.right.dat id x fx fy fz
+
+variable Qs atom vx*fx+vy*fy+vz*fz
+# compute QL left_small reduce sum v_Qs
+compute QL liquid reduce/region rleft_small sum v_Qs
+# compute QR right_small reduce sum v_Qs
+compute QR liquid reduce/region rright_small sum v_Qs
+variable QLv equal c_QL
+variable QRv equal c_QR
+variable vstep equal step
+
+fix QLs all print 100 "${vstep} ${QLv} ${QRv}" file ${filename}.Qs.dat screen no
+
+# Calculate the forces on interface atoms
+dump dumpFV_L interfaceL custom 10 ${filename}.Fv.dat id fx fy fz vx vy vz
+dump dumpFV_R interfaceR custom 10 ${filename}_2.Fv.dat id fx fy fz vx vy vz
+dump_modify dumpFV_L sort id
+dump_modify dumpFV_R sort id
+thermo 100
+
+thermo_style custom step temp etotal cpu
+rerun ${filename}.dump dump x y z vx vy vz replace yes format native
+

@@ -1,0 +1,21 @@
+variable filename string 230415a
+# variable datafile string 220415b_fcc.dat
+variable restartfile string 230415a.end.restart
+
+log ${filename}.log
+read_restart ${restartfile}
+
+neigh_modify delay 0 every 1 check yes
+
+neigh_modify exclude type 1 1
+neigh_modify exclude type 2 2
+neigh_modify exclude type 3 3
+neigh_modify exclude type 2 3
+
+# Calculate the forces on interface atoms
+dump forces interface custom 10 ${filename}.Fv.dat id fx fy fz vx vy vz
+dump_modify forces sort id
+thermo 100
+
+rerun ${filename}.dump dump x y z vx vy vz replace yes format native
+

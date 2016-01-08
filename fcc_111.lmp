@@ -1,0 +1,76 @@
+variable filename string lj_12x12
+#variable datafile string ${filename}_sls.dat
+
+log fcc_coords.log
+
+boundary p p p
+units metal
+atom_style atomic
+
+variable T equal 0.1
+# variable a equal 4.08 # Gold
+variable a equal 1.56 # LJ
+
+lattice fcc $a
+# variable x equal 4.08*sqrt(3)/3
+variable xlatt equal $a*sqrt(3)/3
+variable ylatt equal $a/sqrt(2)
+variable zlatt equal $a*sqrt(3)/2/sqrt(2)
+variable Lx equal 3*${xlatt}
+variable Ly equal 12*${ylatt}
+variable Lz equal 12*${zlatt}
+region	box block 0 ${Lx} 0 ${Ly} 0 ${Lz} units box
+create_box 1 box
+
+# lattice	fcc 4.08 orient x 1 0 0 orient y 0 1 0 orient z 0 0 1  
+lattice fcc $a orient x 1 1 1 orient y 1 -1 0 orient z 1 1 -2
+create_atoms 1 box
+# replicate 10 4 4
+variable xhalf equal ${xlatt}/2.0
+variable yhalf equal ${ylatt}/2.0
+variable zhalf equal ${zlatt}/2.0
+displace_atoms all move ${xhalf} ${yhalf} ${zhalf}
+
+#region box block 0 50.0 0 50.0 0 50.0
+#create_box 1 box
+
+#lattice fcc 4.08 orient x 1 1 1 orient y 1 -1 0 orient z 1 1 -2
+#create_atoms 1 box
+
+pair_style lj/cut 2.5
+pair_coeff * * 1 1
+mass 1 1.0
+
+timestep 0.002
+
+# velocity all create ${T} 23423424 dist gaussian mom yes
+
+fix NVE all nve
+dump simu_coords all xyz 1 ${filename}.xyz
+dump coords all custom 1 ${filename}.lammpstrj id type x y z
+run 0
+quit
+
+# FIXES
+thermo 100
+group liquid type 2
+fix NVE liquid nve/limit 0.1
+
+run 500
+
+
+# Temperature profile
+compute KE all ke/atom
+
+variable Ti atom c_KE*2.0/3.0
+variable Ti2 atom v_Ti*v_Ti
+compute chunk all chunk/atom bin/1d x 0.0 2.0
+fix Ts all ave/chunk 1 1 10 chunk v_Ti v_Ti2 file temperatures.dat ave running overwrite
+
+dump simu_coords all xyz 1 ${filename}_coords.xyz
+
+run 0
+unfix Ts
+# uncompute chunk 
+write_restart ${filename}.equil.restart
+quit
